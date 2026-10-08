@@ -1,42 +1,24 @@
 import pandas as pd
-
 from sklearn.preprocessing import PolynomialFeatures
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import Pipeline
+from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold, cross_val_score
-from sklearn.metrics import mean_squared_error, r2_score
 
 
 # ============================================================
 # 1. LOAD TRAINING DATA
 # ============================================================
 
-train = pd.read_csv("BT2024152_train_var1.csv")
+train_data = pd.read_csv("BT2024152_train_var1.csv")
 
-print("Training data shape:", train.shape)
-
-print("\nTraining columns:")
-print(train.columns.tolist())
+X = train_data[["x1", "x2", "x3", "x4", "x5", "x6"]]
+y = train_data["y"]
 
 
 # ============================================================
-# 2. SEPARATE FEATURES AND TARGET
+# 2. CROSS-VALIDATION
 # ============================================================
 
-X = train.drop(columns=["y"])
-y = train["y"]
-
-print("\nFeatures:")
-print(X.columns.tolist())
-
-print("\nTarget: y")
-
-
-# ============================================================
-# 3. 5-FOLD CROSS VALIDATION
-# ============================================================
-
-kf = KFold(
+cv = KFold(
     n_splits=5,
     shuffle=True,
     random_state=42
@@ -44,188 +26,206 @@ kf = KFold(
 
 
 # ============================================================
-# 4. TEST DIFFERENT POLYNOMIAL DEGREES
+# 3. ALPHA VALUES
+# ============================================================
+
+alphas = [
+    1e-8,
+    1e-7,
+    1e-6,
+    1e-5,
+    1e-4,
+    1e-3,
+    1e-2,
+    1e-1,
+    1,
+    10
+]
+
+
+# ============================================================
+# 4. TEST POLYNOMIAL DEGREES 1 TO 10
 # ============================================================
 
 results = []
 
 for degree in range(1, 11):
 
-    model = Pipeline([
-        (
-            "polynomial_features",
-            PolynomialFeatures(
-                degree=degree,
-                include_bias=False
-            )
-        ),
+    # Create polynomial features
+    poly = PolynomialFeatures(
+        degree=degree,
+        include_bias=False
+    )
 
-        (
-            "linear_regression",
-            LinearRegression()
+    X_poly = poly.fit_transform(X)
+
+    alpha_results = []
+
+    # --------------------------------------------------------
+    # Try every alpha internally
+    # --------------------------------------------------------
+
+    for alpha in alphas:
+
+        model = Ridge(alpha=alpha)
+
+        # CV MSE
+        mse_scores = cross_val_score(
+            model,
+            X_poly,
+            y,
+            cv=cv,
+            scoring="neg_mean_squared_error"
         )
-    ])
 
-    # Cross-validation MSE
-    mse_scores = cross_val_score(
-        model,
-        X,
-        y,
-        cv=kf,
-        scoring="neg_mean_squared_error"
+        cv_mse = -mse_scores.mean()
+
+        # CV R2
+        r2_scores = cross_val_score(
+            model,
+            X_poly,
+            y,
+            cv=cv,
+            scoring="r2"
+        )
+
+        cv_r2 = r2_scores.mean()
+
+        # Store internally
+        alpha_results.append({
+            "alpha": alpha,
+            "mse": cv_mse,
+            "r2": cv_r2
+        })
+
+
+    # --------------------------------------------------------
+    # Find best alpha for this degree
+    # --------------------------------------------------------
+
+    best_alpha_result = min(
+        alpha_results,
+        key=lambda x: x["mse"]
     )
 
-    cv_mse = -mse_scores.mean()
+    best_alpha = best_alpha_result["alpha"]
+    best_mse = best_alpha_result["mse"]
+    best_r2 = best_alpha_result["r2"]
 
-    # Cross-validation R2
-    r2_scores = cross_val_score(
-        model,
-        X,
-        y,
-        cv=kf,
-        scoring="r2"
-    )
 
-    cv_r2 = r2_scores.mean()
-
+    # Store result internally
     results.append({
         "Degree": degree,
-        "CV_MSE": cv_mse,
-        "CV_R2": cv_r2
+        "Best_Alpha": best_alpha,
+        "CV_MSE": best_mse,
+        "CV_R2": best_r2
     })
 
 
+    # --------------------------------------------------------
+    # PRINT IMMEDIATELY AFTER DEGREE IS COMPLETED
+    # --------------------------------------------------------
+
+    print(
+        f"Degree {degree} completed -> "
+        f"Best Alpha: {best_alpha}, "
+        f"CV MSE: {best_mse:.6f}, "
+        f"CV R2: {best_r2:.6f}",
+        flush=True
+    )
+
+
 # ============================================================
-# 5. DISPLAY RESULTS
+# 5. FIND OVERALL BEST DEGREE
 # ============================================================
 
 results_df = pd.DataFrame(results)
 
-print("\n==============================================")
-print("POLYNOMIAL DEGREE COMPARISON")
-print("==============================================")
+best_row = results_df.loc[
+    results_df["CV_MSE"].idxmin()
+]
 
-print(results_df.to_string(index=False))
+best_degree = int(best_row["Degree"])
+best_alpha = float(best_row["Best_Alpha"])
+best_cv_mse = float(best_row["CV_MSE"])
+best_cv_r2 = float(best_row["CV_R2"])
+
+
+print("\n==================================================")
+print("FINAL RESULT")
+print("==================================================")
+
+print(f"Best Polynomial Degree: {best_degree}")
+print(f"Best Alpha: {best_alpha}")
+print(f"Best CV MSE: {best_cv_mse:.6f}")
+print(f"Best CV R2: {best_cv_r2:.6f}")
 
 
 # ============================================================
-# 6. FIND BEST DEGREE
+# 6. TRAIN FINAL MODEL USING BEST DEGREE AND ALPHA
 # ============================================================
 
-best_degree = int(
-    results_df.loc[
-        results_df["CV_MSE"].idxmin(),
-        "Degree"
-    ]
+final_poly = PolynomialFeatures(
+    degree=best_degree,
+    include_bias=False
 )
 
-best_cv_mse = results_df.loc[
-    results_df["Degree"] == best_degree,
-    "CV_MSE"
-].iloc[0]
+X_poly = final_poly.fit_transform(X)
 
-best_cv_r2 = results_df.loc[
-    results_df["Degree"] == best_degree,
-    "CV_R2"
-].iloc[0]
-
-
-print("\n==============================================")
-print("BEST MODEL")
-print("==============================================")
-
-print("Best Polynomial Degree:", best_degree)
-print("Best CV MSE:", best_cv_mse)
-print("Best CV R2 :", best_cv_r2)
-
-
-# ============================================================
-# 7. TRAIN FINAL MODEL USING BEST DEGREE
-# ============================================================
-
-final_model = Pipeline([
-    (
-        "polynomial_features",
-        PolynomialFeatures(
-            degree=best_degree,
-            include_bias=False
-        )
-    ),
-
-    (
-        "linear_regression",
-        LinearRegression()
-    )
-])
-
-final_model.fit(X, y)
-
-
-# ============================================================
-# 8. TRAINING PERFORMANCE
-# ============================================================
-
-train_predictions = final_model.predict(X)
-
-train_mse = mean_squared_error(
-    y,
-    train_predictions
+final_model = Ridge(
+    alpha=best_alpha
 )
 
-train_r2 = r2_score(
-    y,
-    train_predictions
-)
-
-
-print("\n==============================================")
-print("TRAINING PERFORMANCE")
-print("==============================================")
-
-print("Training MSE:", train_mse)
-print("Training R2 :", train_r2)
+final_model.fit(X_poly, y)
 
 
 # ============================================================
-# 9. LOAD TEST DATA
+# 7. GET WEIGHTS AND INTERCEPT INTERNALLY
 # ============================================================
 
-test = pd.read_csv("BT2024152_test_var1.csv")
-
-print("\nTest data shape:", test.shape)
-
-X_test = test
+weights = final_model.coef_
+intercept = final_model.intercept_
 
 
 # ============================================================
-# 10. MAKE TEST PREDICTIONS
+# 8. LOAD TEST DATA
 # ============================================================
 
-test_predictions = final_model.predict(X_test)
+test_data = pd.read_csv("BT2024152_test_var1.csv")
+
+X_test = test_data[
+    ["x1", "x2", "x3", "x4", "x5", "x6"]
+]
+
+
+# ============================================================
+# 9. TRANSFORM TEST DATA
+# ============================================================
+
+X_test_poly = final_poly.transform(X_test)
+
+
+# ============================================================
+# 10. MANUAL PREDICTION
+# ============================================================
+
+predictions = (
+    X_test_poly @ weights
+) + intercept
 
 
 # ============================================================
 # 11. SAVE PREDICTIONS
 # ============================================================
 
-prediction_file = "BT2024152_pred_var1.csv"
-
 prediction_df = pd.DataFrame({
-    "y": test_predictions
+    "y": predictions
 })
 
 prediction_df.to_csv(
-    prediction_file,
+    "BT2024152_pred_var1.csv",
     index=False
 )
 
 
-print("\n==============================================")
-print("PREDICTION")
-print("==============================================")
-
-print("Prediction file saved as:")
-print(prediction_file)
-
-print("\nFirst 10 predictions:")
-print(prediction_df.head(10))
+print("\nPredictions saved to: BT2024152_pred_var1.csv")
